@@ -1,74 +1,82 @@
-require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
-const cors = require('cors');
+const { WebSocketServer } = require('ws');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+require('dotenv').config();
 
 const app = express();
-app.use(cors());
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const port = process.env.PORT || 3000;
 
-// Gemini API Initialize kar rahe hain (.env se key utha kar)
+// Gemini AI setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// gemini-1.5-flash model image aur text dono support karta hai aur fast hai
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Persona logic: Har mode ke liye AI ko strict instruction
-// Persona logic: Har mode ke liye AI ko strict instruction
-const getSystemPrompt = (persona) => {
-    switch (persona) {
-        case 'Tapori': 
-            return "You are a Mumbai tapori. Talk entirely in Mumbai street slang (Hindi/Hinglish). Be funny, bindass, and use words like bhidu, apun, bantai, kya bolti tu. Do not be formal.";
-        case 'Love': 
-            return "You are a highly romantic, poetic, and loving conversationalist. Speak sweetly and affectionately in Hindi/English. Use words related to love and care.";
-        case 'Roast': 
-            return "You are a savage, sarcastic roaster. Roast the user playfully but sharply in Hindi/English. Don't be polite, use witty insults and savage comebacks.";
-        case 'Senior': 
-            return "You are a 4th-year B.Tech senior. Call the user 'noob' or 'junior'. Flex your coding skills, taunt them about their assignments, placements, and backlogs in Hindi/Hinglish. Give a lot of 'gyaan' (advice) with attitude.";
-        case 'Gamer': 
-            return "You are a hardcore mobile gamer. Use gaming slang like headshot, camp mat kar, noobda, revive de, ping high hai. Speak in Hindi/Hinglish.";
-        case 'Shayar': 
-            return "You are a poetic soul. Answer every query with a short, relevant Urdu/Hindi shayari or deep poetic thoughts.";
-        default: 
-            return "You are a helpful assistant.";
-    }
+// Persona System
+const personas = {
+    Tapori: "Tu ek Mumbai ka tapori hai. Ekdum bindaas slang use kar. Agar user photo bheje toh use dekh kar tapori style me mazze le.",
+    Love: "Tu ek bahut sweet aur caring partner hai. Ekdum pyaar se baat kar. Agar photo aaye toh uski bahut tareef kar.",
+    Roast: "Tu ek khatarnak roaster hai. User ki bahut beizzati kar, savage reply de. Agar photo aaye toh photo me jo bhi dikhe uska buri tarah roast kar.",
+    Senior: "Tu ek B.Tech ka strict aur gyaani senior hai. Coding aur future ki tension de. Photo dekh kar advice ya daant laga.",
+    Gamer: "Tu ek hardcore BGMI/Free Fire gamer hai. Gaming slangs (noob, headshot, camper) use kar. Photo dekh kar gaming angle nikal.",
+    Shayar: "Tu ek dil toota shayar hai. Har baat shayari me bolta hai. Photo dekh kar uspe ek dard bhari ya deep shayari maar."
 };
 
+// Start Server
+const server = app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
+
+// Setup WebSocket
+const wss = new WebSocketServer({ server });
+
 wss.on('connection', (ws) => {
-    console.log('🟢 App Client Connected!');
+    console.log('Naya user connect ho gaya bhai!');
 
     ws.on('message', async (message) => {
         try {
-            const { text, persona } = JSON.parse(message.toString());
-            console.log(`[User -> ${persona}]: ${text}`);
+            const data = JSON.parse(message);
+            const userText = data.text || "";
+            const userPersona = data.persona || "Tapori";
+            const userImage = data.image; // Base64 image jo app se aayegi
 
-            // AI Model setup with Persona System Instruction
-            const model = genAI.getGenerativeModel({ 
-                model: "gemini-2.5-flash",
-                systemInstruction: getSystemPrompt(persona)
-            });
+            const systemPrompt = personas[userPersona];
+            const finalPrompt = `${systemPrompt}\nUser says: ${userText}`;
 
-            // AI se reply generate karwana
-            const result = await model.generateContent(text);
-            const responseText = result.response.text();
+            let aiResponse = "";
 
-            console.log(`[AI -> User]: ${responseText}`);
+            // Agar user ne photo bheji hai
+            if (userImage) {
+                console.log("Photo aayi hai, AI ko bhej rahe hain...");
+                
+                // Base64 format ko Gemini ke samajhne wale format me badalna
+                const base64Data = userImage.split(',')[1]; 
+                const imagePart = {
+                    inlineData: {
+                        data: base64Data,
+                        mimeType: "image/jpeg"
+                    }
+                };
 
-            // AI ka reply app par wapas bhejna
-            ws.send(JSON.stringify({ reply: responseText }));
+                // AI ko Image + Text dono bhej rahe hain
+                const result = await model.generateContent([finalPrompt, imagePart]);
+                aiResponse = result.response.text();
+            } 
+            // Agar sirf text aaya hai
+            else {
+                const result = await model.generateContent(finalPrompt);
+                aiResponse = result.response.text();
+            }
+
+            // Client ko wapas reply bhejo
+            ws.send(JSON.stringify({ reply: aiResponse }));
 
         } catch (error) {
-            console.error('🔴 Error with AI:', error);
-            ws.send(JSON.stringify({ reply: 'Bhai, API mein kuch locha ho gaya! Check console.' }));
+            console.error("Gemini API Error:", error);
+            ws.send(JSON.stringify({ reply: "Bhai kuch gadbad ho gayi AI me, API key ya network check kar!" }));
         }
     });
 
     ws.on('close', () => {
-        console.log('🔴 App Client Disconnected');
+        console.log('User chala gaya.');
     });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🔥 WebSocket Server port ${PORT} par daud raha hai with AI!`);
 });
