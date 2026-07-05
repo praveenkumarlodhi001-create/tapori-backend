@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 // Gemini AI setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // gemini-1.5-flash model image aur text dono support karta hai aur fast hai
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 // Persona System
 const personas = {
