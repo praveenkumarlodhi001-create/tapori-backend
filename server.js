@@ -6,77 +6,103 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Gemini AI setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// gemini-1.5-flash model image aur text dono support karta hai aur fast hai
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+// Stable production model configuration
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Persona System
 const personas = {
-    Tapori: "Tu ek Mumbai ka tapori hai. Ekdum bindaas slang use kar. Agar user photo bheje toh use dekh kar tapori style me mazze le.",
-    Love: "Tu ek bahut sweet aur caring partner hai. Ekdum pyaar se baat kar. Agar photo aaye toh uski bahut tareef kar.",
-    Roast: "Tu ek khatarnak roaster hai. User ki bahut beizzati kar, savage reply de. Agar photo aaye toh photo me jo bhi dikhe uska buri tarah roast kar.",
-    Senior: "Tu ek B.Tech ka strict aur gyaani senior hai. Coding aur future ki tension de. Photo dekh kar advice ya daant laga.",
-    Gamer: "Tu ek hardcore BGMI/Free Fire gamer hai. Gaming slangs (noob, headshot, camper) use kar. Photo dekh kar gaming angle nikal.",
-    Shayar: "Tu ek dil toota shayar hai. Har baat shayari me bolta hai. Photo dekh kar uspe ek dard bhari ya deep shayari maar."
+    Tapori: "Street-smart thug. Use slang. Roast playfully. Be human.",
+    Love: "Deeply romantic and poetic. Show intense human love.",
+    Roast: "Savage, sarcastic comedian. Sharp tongue. Be human.",
+    Senior: "Grumpy, strict, frustrated college senior. Scold the user.",
+    Gamer: "Toxic, aggressive pro-gamer. Use gaming lingo (noob, lag).",
+    Shayar: "Philosophical poet. Use rhyming lines and deep emotion."
 };
 
-// Start Server
 const server = app.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });
 
-// Setup WebSocket
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ 
+    server,
+    maxPayload: 10 * 1024 * 1024 // Optimized payload limit to prevent memory bloat
+});
 
-wss.on('connection', (ws) => {
-    console.log('Naya user connect ho gaya bhai!');
+wss.on('connection', (ws, req) => {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+
+        if (token !== "ROASTIFY_SECRET_123") {
+            ws.close();
+            return; 
+        }
+    } catch (err) {
+        ws.close();
+        return;
+    }
 
     ws.on('message', async (message) => {
         try {
-            const data = JSON.parse(message);
-            const userText = data.text || "";
-            const userPersona = data.persona || "Tapori";
-            const userImage = data.image; // Base64 image jo app se aayegi
-
-            const systemPrompt = personas[userPersona];
-            const finalPrompt = `${systemPrompt}\nUser says: ${userText}`;
-
-            let aiResponse = "";
-
-            // Agar user ne photo bheji hai
-            if (userImage) {
-                console.log("Photo aayi hai, AI ko bhej rahe hain...");
-                
-                // Base64 format ko Gemini ke samajhne wale format me badalna
-                const base64Data = userImage.split(',')[1]; 
-                const imagePart = {
-                    inlineData: {
-                        data: base64Data,
-                        mimeType: "image/jpeg"
-                    }
-                };
-
-                // AI ko Image + Text dono bhej rahe hain
-                const result = await model.generateContent([finalPrompt, imagePart]);
-                aiResponse = result.response.text();
-            } 
-            // Agar sirf text aaya hai
-            else {
-                const result = await model.generateContent(finalPrompt);
-                aiResponse = result.response.text();
+            let data;
+            try {
+                data = JSON.parse(message);
+            } catch (parseErr) {
+                ws.send(JSON.stringify({ 
+                    reply: "We received an invalid request format. Please try sending your message again.", 
+                    mood: "Neutral" 
+                }));
+                return;
             }
 
-            // Client ko wapas reply bhejo
-            ws.send(JSON.stringify({ reply: aiResponse }));
+            const { text, persona, image, language, userName, dob } = data;
+            
+            const systemPrompt = personas[persona] || personas.Tapori;
+            const safeLang = language || "English";
+            const safeUser = userName || "Dost";
+            const safeDob = dob || "Unknown";
+            
+            const masterPrompt = `
+System Instruction: ${systemPrompt}
+Strict Rules:
+1. You are a real living human. NEVER mention being an AI, model, or assistant.
+2. Respond STRICTLY and ENTIRELY in the ${safeLang} language.
+3. User Info: Name is ${safeUser}, DOB is ${safeDob}. Use this info naturally to tease or talk.
+4. Keep the response engaging, emotional, and in character.
+
+User says: ${text || "Hello"}`;
+
+            let promptParts = [masterPrompt];
+
+            if (image) {
+                const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+                promptParts.push({
+                    inlineData: { data: base64Data, mimeType: "image/jpeg" }
+                });
+            }
+
+            const result = await model.generateContent(promptParts);
+            const responseText = result.response.text().trim();
+
+            ws.send(JSON.stringify({ 
+                reply: responseText, 
+                mood: "Normal" 
+            }));
 
         } catch (error) {
-            console.error("Gemini API Error:", error);
-            ws.send(JSON.stringify({ reply: "Bhai kuch gadbad ho gayi AI me, API key ya network check kar!" }));
+            console.error("Gemini API Error:", error.message || error);
+            ws.send(JSON.stringify({ 
+                reply: "Our servers are currently experiencing high traffic or a slow connection. Please try again in a moment.", 
+                mood: "Neutral" 
+            }));
         }
     });
 
     ws.on('close', () => {
-        console.log('User chala gaya.');
+        // Connection closed cleanly
+    });
+
+    ws.on('error', (err) => {
+        console.error("WebSocket error:", err);
     });
 });
